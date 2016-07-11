@@ -116,8 +116,6 @@ public final class Connection: ConnectionProtocol {
         
     }
     
-    public var logger: Logger?
-    
     private var connection: OpaquePointer? = nil
     
     public let connectionInfo: ConnectionInfo
@@ -189,8 +187,6 @@ public final class Connection: ConnectionProtocol {
     }
     
     public func execute(_ components: QueryComponents) throws -> Result {
-        
-        defer { logger?.debug(components.description) }
         
         let result: OpaquePointer
         
