@@ -22,7 +22,7 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
 
-
+import Foundation
 @_exported import SQL
 import CLibpq
 
@@ -43,7 +43,7 @@ public final class Connection: ConnectionProtocol {
         
         public init(_ uri: URI) throws {
             
-            guard let host = uri.host, let port = uri.port, let databaseName = uri.path?.trim(["/"]) else {
+            guard let host = uri.host, let port = uri.port, let databaseName = uri.path?.trimmingCharacters(in: ["/"]) else {
                 throw ConnectionError(description: "Failed to extract host, port, database name from URI")
             }
             
