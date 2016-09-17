@@ -28,7 +28,7 @@ import CLibpq
 
 public final class Connection: ConnectionProtocol {
     
-    public struct Error: ErrorProtocol {
+    public struct ConnectionError: Error {
         public let description: String
     }
     
@@ -43,8 +43,8 @@ public final class Connection: ConnectionProtocol {
         
         public init(_ uri: URI) throws {
             
-            guard let host = uri.host, port = uri.port, databaseName = uri.path?.trim(["/"]) else {
-                throw Error(description: "Failed to extract host, port, database name from URI")
+            guard let host = uri.host, let port = uri.port, let databaseName = uri.path?.trim(["/"]) else {
+                throw ConnectionError(description: "Failed to extract host, port, database name from URI")
             }
             
             self.host = host
@@ -148,12 +148,12 @@ public final class Connection: ConnectionProtocol {
         }
     }
     
-    public var mostRecentError: Error? {
-        guard let errorString = String(validatingUTF8: PQerrorMessage(connection)) where !errorString.isEmpty else {
+    public var mostRecentError: ConnectionError? {
+        guard let errorString = String(validatingUTF8: PQerrorMessage(connection)) , !errorString.isEmpty else {
             return nil
         }
         
-        return Error(description: errorString)
+        return ConnectionError(description: errorString)
     }
     
     public func close() {
@@ -162,15 +162,15 @@ public final class Connection: ConnectionProtocol {
     }
     
     public func createSavePointNamed(_ name: String) throws {
-        try execute("SAVEPOINT \(name)")
+        _ = try execute("SAVEPOINT \(name)")
     }
     
     public func rollbackToSavePointNamed(_ name: String) throws {
-        try execute("ROLLBACK TO SAVEPOINT \(name)")
+        _ = try execute("ROLLBACK TO SAVEPOINT \(name)")
     }
     
     public func releaseSavePointNamed(_ name: String) throws {
-        try execute("RELEASE SAVEPOINT \(name)")
+        _ = try execute("RELEASE SAVEPOINT \(name)")
     }
     
     public func executeInsertQuery<T: SQLDataConvertible>(query: InsertQuery, returningPrimaryKeyForField primaryKey: DeclaredField) throws -> T {
@@ -180,47 +180,50 @@ public final class Connection: ConnectionProtocol {
         let result = try execute(components)
         
         guard let pk: T = try result.first?.value("returned__pk") else {
-            throw Error(description: "Did not receive returned primary key")
+            throw ConnectionError(description: "Did not receive returned primary key")
         }
         
         return pk
     }
     
     public func execute(_ components: QueryComponents) throws -> Result {
-        
+      
         let result: OpaquePointer
-        
+
         if components.values.isEmpty {
             result = PQexec(connection, components.string)
         }
         else {
-            let values = UnsafeMutablePointer<UnsafePointer<Int8>?>(allocatingCapacity: components.values.count)
-            
+            let values = UnsafeMutablePointer<UnsafePointer<Int8>?>.allocate(capacity: components.values.count)
+
             defer {
                 values.deinitialize()
-                values.deallocateCapacity(components.values.count)
+                values.deallocate(capacity: components.values.count)
             }
-            
+
             var temps = [Array<UInt8>]()
             for (i, parameter) in components.values.enumerated() {
                 
                 guard let value = parameter else {
                     temps.append(Array<UInt8>("NULL".utf8) + [0])
-                    values[i] = UnsafePointer<Int8>(temps.last!)
+                    values[i] = UnsafeRawPointer(temps.last!).assumingMemoryBound(to: Int8.self)
+//                  values[i] = UnsafePointer<Int8>(temps.last!)
                     continue
                 }
                 
                 switch value {
                 case .Binary(let data):
-                    values[i] = UnsafePointer<Int8>(Array(data))
+                      values[i] = UnsafeRawPointer(Array(data)).assumingMemoryBound(to: Int8.self)
+//                    values[i] = UnsafePointer<Int8>(Array(data))
                     break
                 case .Text(let string):
                     temps.append(Array<UInt8>(string.utf8) + [0])
-                    values[i] = UnsafePointer<Int8>(temps.last!)
+                    values[i] = UnsafeRawPointer(temps.last!).assumingMemoryBound(to: Int8.self)
+//                  values[i] = UnsafePointer<Int8>(temps.last!)
                     break
                 }
             }
-            
+
             result = PQexecParams(
                 self.connection,
                 try components.stringWithEscapedValuesUsingPrefix("$") {
@@ -235,7 +238,7 @@ public final class Connection: ConnectionProtocol {
                 0
             )
         }
-        
-        return try Result(result)
+
+      return try Result(result)
     }
 }
