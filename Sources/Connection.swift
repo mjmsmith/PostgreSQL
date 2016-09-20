@@ -115,7 +115,9 @@ public final class Connection: ConnectionProtocol {
         }
         
     }
-    
+  
+    private var executeQueue = DispatchQueue(label: "postgresql")
+
     private var connection: OpaquePointer? = nil
     
     public let connectionInfo: ConnectionInfo
@@ -187,8 +189,9 @@ public final class Connection: ConnectionProtocol {
     }
     
     public func execute(_ components: QueryComponents) throws -> Result {
+        print(components.string)
       
-        let result: OpaquePointer
+        var result: OpaquePointer?
 
         if components.values.isEmpty {
             result = PQexec(connection, components.string)
@@ -224,21 +227,27 @@ public final class Connection: ConnectionProtocol {
                 }
             }
 
-            result = PQexecParams(
-                self.connection,
-                try components.stringWithEscapedValuesUsingPrefix("$") {
-                    index, _ in
-                    return String(index + 1)
-                },
-                Int32(components.values.count),
-                nil,
-                values,
-                nil,
-                nil,
-                0
-            )
+            try self.executeQueue.sync() {
+                result = PQexecParams(
+                    self.connection,
+                    try components.stringWithEscapedValuesUsingPrefix("$") {
+                        index, _ in
+                        return String(index + 1)
+                    },
+                    Int32(components.values.count),
+                    nil,
+                    values,
+                    nil,
+                    nil,
+                    0
+                )
+            }
         }
 
-      return try Result(result)
+      if result == nil {
+        throw ConnectionError(description: "nil result")
+      }
+      
+      return try Result(result!)
     }
 }
