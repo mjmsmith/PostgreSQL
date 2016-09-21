@@ -116,8 +116,6 @@ public final class Connection: ConnectionProtocol {
         
     }
   
-    private var executeQueue = DispatchQueue(label: "postgresql")
-
     private var connection: OpaquePointer? = nil
     
     public let connectionInfo: ConnectionInfo
@@ -227,21 +225,19 @@ public final class Connection: ConnectionProtocol {
                 }
             }
 
-            try self.executeQueue.sync() {
-                result = PQexecParams(
-                    self.connection,
-                    try components.stringWithEscapedValuesUsingPrefix("$") {
-                        index, _ in
-                        return String(index + 1)
-                    },
-                    Int32(components.values.count),
-                    nil,
-                    values,
-                    nil,
-                    nil,
-                    0
-                )
-            }
+            result = PQexecParams(
+                self.connection,
+                try components.stringWithEscapedValuesUsingPrefix("$") {
+                    index, _ in
+                    return String(index + 1)
+                },
+                Int32(components.values.count),
+                nil,
+                values,
+                nil,
+                nil,
+                0
+            )
         }
 
       if result == nil {
