@@ -31,6 +31,7 @@ public struct ConnectionError: Error, CustomStringConvertible {
 }
 
 public final class Connection: ConnectionProtocol {
+  public static let willExecuteSQL = Notification.Name("PostgreSQL.Connection.willExecuteSQL") // object = "<sql>"
   
   public struct ConnectionInfo: ConnectionInfoProtocol {
     public var host: String
@@ -174,7 +175,11 @@ public final class Connection: ConnectionProtocol {
 
     var components = query.queryComponents
     components.append(QueryComponents(strings: ["RETURNING", primaryKey.qualifiedName, "AS", "returned__pk"]))
-        
+
+    DispatchQueue.global(qos: .background).async() {
+      NotificationCenter.default.post(name: Connection.willExecuteSQL, object: components.string, userInfo: nil)
+    }
+    
     let result = try execute(components)
         
     guard let pk: T = try result.first?.value("returned__pk") else {
@@ -186,7 +191,9 @@ public final class Connection: ConnectionProtocol {
     
   @discardableResult
   public func execute(_ components: QueryComponents) throws -> Result {
-    print(components.string)
+    DispatchQueue.global(qos: .background).async() {
+      NotificationCenter.default.post(name: Connection.willExecuteSQL, object: components.string, userInfo: nil)
+    }
       
     guard !components.values.isEmpty else {
       guard let resultPointer = PQexec(connection, components.string) else {
