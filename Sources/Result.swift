@@ -28,143 +28,127 @@ import CLibpq
 
 public class Result: SQL.ResultProtocol {
     
-    public enum ResultError: Error {
-        case BadStatus(Status, String)
-    }
+  public enum ResultError: Error {
+    case BadStatus(Status, String)
+  }
     
-    public enum Status: Int, ResultStatus {
-        case EmptyQuery
-        case CommandOK
-        case TuplesOK
-        case CopyOut
-        case CopyIn
-        case BadResponse
-        case NonFatalError
-        case FatalError
-        case CopyBoth
-        case SingleTuple
-        case Unknown
+  public enum Status: Int, ResultStatus {
+    case EmptyQuery
+    case CommandOK
+    case TuplesOK
+    case CopyOut
+    case CopyIn
+    case BadResponse
+    case NonFatalError
+    case FatalError
+    case CopyBoth
+    case SingleTuple
+    case Unknown
         
-        public init(status: ExecStatusType) {
-            switch status {
-            case PGRES_EMPTY_QUERY:
-                self = .EmptyQuery
-                break
-            case PGRES_COMMAND_OK:
-                self = .CommandOK
-                break
-            case PGRES_TUPLES_OK:
-                self = .TuplesOK
-                break
-            case PGRES_COPY_OUT:
-                self = .CopyOut
-                break
-            case PGRES_COPY_IN:
-                self = .CopyIn
-                break
-            case PGRES_BAD_RESPONSE:
-                self = .BadResponse
-                break
-            case PGRES_NONFATAL_ERROR:
-                self = .NonFatalError
-                break
-            case PGRES_FATAL_ERROR:
-                self = .FatalError
-                break
-            case PGRES_COPY_BOTH:
-                self = .CopyBoth
-                break
-            case PGRES_SINGLE_TUPLE:
-                self = .SingleTuple
-                break
-            default:
-                self = .Unknown
-                break
-            }
-        }
-        
-        public var successful: Bool {
-            return self != .BadResponse && self != .FatalError
-        }
+    public init(status: ExecStatusType) {
+      switch status {
+        case PGRES_EMPTY_QUERY:
+          self = .EmptyQuery
+        case PGRES_COMMAND_OK:
+          self = .CommandOK
+        case PGRES_TUPLES_OK:
+          self = .TuplesOK
+        case PGRES_COPY_OUT:
+          self = .CopyOut
+        case PGRES_COPY_IN:
+          self = .CopyIn
+        case PGRES_BAD_RESPONSE:
+          self = .BadResponse
+        case PGRES_NONFATAL_ERROR:
+          self = .NonFatalError
+        case PGRES_FATAL_ERROR:
+          self = .FatalError
+        case PGRES_COPY_BOTH:
+          self = .CopyBoth
+        case PGRES_SINGLE_TUPLE:
+          self = .SingleTuple
+        default:
+          self = .Unknown
+      }
     }
+        
+    public var successful: Bool {
+      return self != .BadResponse && self != .FatalError
+    }
+  }
 
-    internal init(_ resultPointer: OpaquePointer) throws {
-        self.resultPointer = resultPointer
+  internal init(_ resultPointer: OpaquePointer) throws {
+    self.resultPointer = resultPointer
         
-        guard status.successful else {
-            throw ResultError.BadStatus(status, String(validatingUTF8: PQresultErrorMessage(resultPointer)) ?? "No error message")
-        }
+    guard status.successful else {
+      throw ResultError.BadStatus(status, String(validatingUTF8: PQresultErrorMessage(resultPointer)) ?? "No error message")
     }
+  }
     
-    deinit {
-        clear()
-    }
+  deinit {
+    clear()
+  }
     
-    public subscript(position: Int) -> Row {
-        let index = Int32(position)
+  public subscript(position: Int) -> Row {
+    let index = Int32(position)
+    var result: [String: Data?] = [:]
         
-        var result: [String: Data?] = [:]
-        
-        for (fieldIndex, field) in fields.enumerated() {
-            let fieldIndex = Int32(fieldIndex)
+    for (fieldIndex, field) in fields.enumerated() {
+      let fieldIndex = Int32(fieldIndex)
             
-            if PQgetisnull(resultPointer, index, fieldIndex) == 1 {
-                result[field.name] = nil
-            }
-            else {
-                
-                result[field.name] = Data(
-                    pointer: PQgetvalue(resultPointer, index, fieldIndex),
-                    length: Int(PQgetlength(resultPointer, index, fieldIndex))
-                )
-            }
-        }
+      if PQgetisnull(resultPointer, index, fieldIndex) == 1 {
+        result[field.name] = nil
+      }
+      else {
+        result[field.name] = Data(
+          pointer: PQgetvalue(resultPointer, index, fieldIndex),
+          length: Int(PQgetlength(resultPointer, index, fieldIndex))
+        )
+      }
+    }
         
-        return Row(dataByfield: result)
-    }
+    return Row(dataByfield: result)
+  }
     
-    public var count: Int {
-        return Int(PQntuples(self.resultPointer))
-    }
+  public var count: Int {
+      return Int(PQntuples(self.resultPointer))
+  }
     
-    lazy public var countAffected: Int = {
-        guard let str = String(validatingUTF8: PQcmdTuples(self.resultPointer)) else {
-            return 0
-        }
+  lazy public var countAffected: Int = {
+    guard let str = String(validatingUTF8: PQcmdTuples(self.resultPointer)) else {
+      return 0
+    }
         
-        return Int(str) ?? 0
-    }()
+    return Int(str) ?? 0
+  }()
     
-    public var status: Status {
-        return Status(status: PQresultStatus(resultPointer))
-    }
+  public var status: Status {
+    return Status(status: PQresultStatus(resultPointer))
+  }
     
-    private let resultPointer: OpaquePointer
+  private let resultPointer: OpaquePointer
     
-    public func clear() {
-        PQclear(resultPointer)
-    }
+  public func clear() {
+    PQclear(resultPointer)
+  }
     
-    public lazy var fields: [FieldInfo] = {
-        var result: [FieldInfo] = []
+  public lazy var fields: [FieldInfo] = {
+    var result: [FieldInfo] = []
         
-        for i in 0..<PQnfields(self.resultPointer) {
-            guard let fieldName = String(validatingUTF8: PQfname(self.resultPointer, i)) else {
-                continue
-            }
+    for i in 0..<PQnfields(self.resultPointer) {
+      guard let fieldName = String(validatingUTF8: PQfname(self.resultPointer, i)) else {
+        continue
+      }
             
-            result.append(
-                FieldInfo(name: fieldName)
-            )
-        }
+      result.append(FieldInfo(name: fieldName))
+    }
         
-        return result
-        
-    }()
+    return result
+  }()
 }
 
 extension Data {
-    public init(pointer: UnsafePointer<Int8>, length: Int) {
-        self = Data(bytes: pointer, count: length)
-    }
+  public init(pointer: UnsafePointer<Int8>, length: Int) {
+    self = Data(bytes: pointer, count: length)
+  }
 }
