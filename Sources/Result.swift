@@ -22,7 +22,7 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
 
-
+import Foundation
 import CLibpq
 @_exported import SQL
 
@@ -165,8 +165,6 @@ public class Result: SQL.ResultProtocol {
 
 extension Data {
     public init(pointer: UnsafePointer<Int8>, length: Int) {
-        var bytes: [UInt8] = [UInt8](repeating: 0, count: length)
-        memcpy(&bytes, pointer, length)
-        self.bytes = bytes
+        self = Data(bytes: pointer, count: length)
     }
 }

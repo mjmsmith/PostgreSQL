@@ -26,12 +26,12 @@ import Foundation
 @_exported import SQL
 import CLibpq
 
+public struct ConnectionError: Error, CustomStringConvertible {
+    public let description: String
+}
+
 public final class Connection: ConnectionProtocol {
-    
-    public struct ConnectionError: Error {
-        public let description: String
-    }
-    
+  
     public struct ConnectionInfo: ConnectionInfoProtocol {
         public var host: String
         public var port: Int
@@ -41,32 +41,38 @@ public final class Connection: ConnectionProtocol {
         public var options: String?
         public var tty: String?
         
-        public init(_ uri: URI) throws {
-            
-            guard let host = uri.host, let port = uri.port, let databaseName = uri.path?.trimmingCharacters(in: ["/"]) else {
-                throw ConnectionError(description: "Failed to extract host, port, database name from URI")
+        public init?(uri: URL) {
+            do {
+                try self.init(uri)
+            } catch {
+                return nil
             }
-            
-            self.host = host
-            self.port = port
-            self.databaseName = databaseName
-            self.username = uri.userInfo?.username
-            self.password = uri.userInfo?.password
-
         }
 
-        public init(host: String, port: Int, databaseName: String, username: String? = nil, password: String? = nil, options: String? = nil, tty: String? = nil) {
+        public init(_ uri: URL) throws {
+            let databaseName = uri.path.trimmingCharacters(in: ["/"])
+          
+            guard let host = uri.host, let port = uri.port else {
+                throw ConnectionError(description: "Failed to extract host, port, database name from URI")
+            }
+          
             self.host = host
             self.port = port
             self.databaseName = databaseName
-            self.username = username
+            self.username = uri.user
+            self.password = uri.password
+        }
+
+        public init(host: String, port: Int = 5432, databaseName: String, password: String? = nil, options: String? = nil, tty: String? = nil) {
+            self.host = host
+            self.port = port
+            self.databaseName = databaseName
             self.password = password
             self.options = options
             self.tty = tty
         }
     }
-    
-    
+  
     public enum InternalStatus {
         case Bad
         case Started
@@ -113,14 +119,13 @@ public final class Connection: ConnectionProtocol {
                 break
             }
         }
-        
     }
   
     private var connection: OpaquePointer? = nil
     
     public let connectionInfo: ConnectionInfo
     
-    public required init(_ info: ConnectionInfo) {
+    public required init(info: ConnectionInfo) {
         self.connectionInfo = info
     }
     
@@ -162,18 +167,20 @@ public final class Connection: ConnectionProtocol {
     }
     
     public func createSavePointNamed(_ name: String) throws {
-        _ = try execute("SAVEPOINT \(name)")
+        let _ = try execute("SAVEPOINT \(name)")
     }
     
     public func rollbackToSavePointNamed(_ name: String) throws {
-        _ = try execute("ROLLBACK TO SAVEPOINT \(name)")
+        let _ = try execute("ROLLBACK TO SAVEPOINT \(name)")
     }
     
     public func releaseSavePointNamed(_ name: String) throws {
-        _ = try execute("RELEASE SAVEPOINT \(name)")
+        let _ = try execute("RELEASE SAVEPOINT \(name)")
     }
-    
+  
+    @discardableResult
     public func executeInsertQuery<T: SQLDataConvertible>(query: InsertQuery, returningPrimaryKeyForField primaryKey: DeclaredField) throws -> T {
+
         var components = query.queryComponents
         components.append(QueryComponents(strings: ["RETURNING", primaryKey.qualifiedName, "AS", "returned__pk"]))
         
@@ -186,46 +193,52 @@ public final class Connection: ConnectionProtocol {
         return pk
     }
     
+    @discardableResult
     public func execute(_ components: QueryComponents) throws -> Result {
         print(components.string)
       
-        var result: OpaquePointer?
-
-        if components.values.isEmpty {
-            result = PQexec(connection, components.string)
+        guard !components.values.isEmpty else {
+            guard let resultPointer = PQexec(connection, components.string) else {
+                throw mostRecentError ?? ConnectionError(description: "Empty result")
+            }
+          
+            return try Result(resultPointer)
         }
-        else {
-            let values = UnsafeMutablePointer<UnsafePointer<Int8>?>.allocate(capacity: components.values.count)
 
-            defer {
-                values.deinitialize()
-                values.deallocate(capacity: components.values.count)
-            }
+        var parameterData: [UnsafePointer<Int8>?] = []
+        var deallocators = [() -> ()]()
+        defer { deallocators.forEach { $0() } }
 
-            var temps = [Array<UInt8>]()
-            for (i, parameter) in components.values.enumerated() {
+        for parameter in components.values {
                 
-                guard let value = parameter else {
-                    temps.append(Array<UInt8>("NULL".utf8) + [0])
-                    values[i] = UnsafeRawPointer(temps.last!).assumingMemoryBound(to: Int8.self)
-//                  values[i] = UnsafePointer<Int8>(temps.last!)
-                    continue
-                }
-                
-                switch value {
-                case .Binary(let data):
-                      values[i] = UnsafeRawPointer(Array(data)).assumingMemoryBound(to: Int8.self)
-//                    values[i] = UnsafePointer<Int8>(Array(data))
-                    break
-                case .Text(let string):
-                    temps.append(Array<UInt8>(string.utf8) + [0])
-                    values[i] = UnsafeRawPointer(temps.last!).assumingMemoryBound(to: Int8.self)
-//                  values[i] = UnsafePointer<Int8>(temps.last!)
-                    break
-                }
+            guard let value = parameter else {
+                parameterData.append(nil)
+                continue
             }
+        
+            let data: AnyCollection<Int8>
+            switch value {
+            case .Binary(let value):
+                data = AnyCollection(value.map { Int8($0) })
 
-            result = PQexecParams(
+            case .Text(let string):
+                data = AnyCollection(string.utf8CString)
+            }
+              
+            let pointer = UnsafeMutablePointer<Int8>.allocate(capacity: Int(data.count))
+            deallocators.append {
+                pointer.deallocate(capacity: Int(data.count))
+            }
+              
+            for (index, byte) in data.enumerated() {
+                pointer[index] = byte
+            }
+          
+            parameterData.append(pointer)
+        }
+
+        let result: OpaquePointer = try parameterData.withUnsafeBufferPointer { buffer in
+            guard let result = PQexecParams(
                 self.connection,
                 try components.stringWithEscapedValuesUsingPrefix("$") {
                     index, _ in
@@ -233,17 +246,16 @@ public final class Connection: ConnectionProtocol {
                 },
                 Int32(components.values.count),
                 nil,
-                values,
+                buffer.isEmpty ? nil : buffer.baseAddress,
                 nil,
                 nil,
                 0
-            )
+            ) else {
+                throw mostRecentError ?? ConnectionError(description: "Empty result")
         }
-
-      if result == nil {
-        throw ConnectionError(description: "nil result")
+        return result
       }
       
-      return try Result(result!)
+      return try Result(result)
     }
 }
